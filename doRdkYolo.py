@@ -1,9 +1,19 @@
 import cv2
 import numpy as np
-import hbm_runtime
+from ultralytics_yolo_det import UltralyticsYOLODetect, UltralyticsYOLODetectConfig
 
-runtime = hbm_runtime.HB_HBMRuntime("models/08182351_best.bin")
-model_name = runtime.model_names[0]
+config = UltralyticsYOLODetectConfig(
+    model_path="models/08182351_best.bin",
+    classes_num=4,
+    score_thres=0.3,
+    nms_thres=0.45,
+    reg=16,
+    resize_type=1,
+    strides=[8, 16, 32]
+)
+
+detector = UltralyticsYOLODetect(config)
+detector.set_scheduling_params(priority=0, bpu_cores=[0])
 
 with open("classes.txt", "r") as f:
     class_names = [line.strip() for line in f.readlines()]
@@ -17,14 +27,11 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
-    nv12_data = bgr_to_nv12(frame, (736, 736))
-    outputs = infer.forward([nv12_data])
+    boxes, scores ,cls_ids = detector.predict(frame)
 
-    detections = parse_yolo_output(outputs, conf_threshold=0.3)
-
-    for box in detections:
-        x1, y1, x2, y2, conf, cls_id = box
-        label = f"{class_names[cls_id]}: {conf:.2f}"
+    for box, score, cls_id in zip(boxes, scores, cls_ids):
+        x1, y1, x2, y2 = map(int, box)
+        label = f"{class_names[cls_id]}: {score:.2f}"
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
 
