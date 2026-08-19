@@ -57,7 +57,7 @@ def parse_yolo_output(outputs, ori_w, ori_h, conf_threshold=0.3, nms_threshold=0
     w = pred[:, 2]
     h = pred[:, 3]
     cls_logits = pred[:, 4:]
-    
+
     cls_scores = 1.0 / (1.0 + np.exp(-cls_logits))
     max_scores = np.max(cls_scores, axis=1)
     cls_ids = np.argmax(cls_scores, axis=1)
@@ -66,17 +66,25 @@ def parse_yolo_output(outputs, ori_w, ori_h, conf_threshold=0.3, nms_threshold=0
     if not np.any(valid):
         return np.empty((0, 4)), np.empty(0), np.empty(0)
     
-    cx = cx[valid] * ori_w
-    cy = cy[valid] * ori_h
-    w = w[valid] * ori_w
-    h = h[valid] * ori_h
+    cx_valid = cx[valid]
+    cy_valid = cy[valid]
+    w_valid = w[valid]
+    h_valid = h[valid]
     scores = max_scores[valid]
     cls_ids = cls_ids[valid]
+    
+    scale_x = ori_w / input_w
+    scale_y = ori_h / input_h
 
-    x1 = cx - w/2
-    y1 = cy - h/2
-    x2 = cx + w/2
-    y2 = cy + h/2
+    cx_img = cx_valid * scale_x
+    cy_img = cy_valid * scale_y
+    w_img = w_valid * scale_x
+    h_img = h_valid * scale_y
+
+    x1 = cx_img - w_img/2
+    y1 = cy_img - h_img/2
+    x2 = cx_img + w_img/2
+    y2 = cy_img + h_img/2
     boxes = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
 
     keep = nms_boxes(boxes, scores, nms_threshold)
@@ -92,8 +100,8 @@ if __name__ == "__main__":
         class_names = [line.strip() for line in f.readlines()]
 
     cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     cap.set(cv2.CAP_PROP_FPS, 30)
     
     input_h, input_w = 736,736
