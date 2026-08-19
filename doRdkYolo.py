@@ -6,12 +6,15 @@ def bgr_to_nv12(frame, target_size):
     resized = cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
     yuv420 = cv2.cvtColor(resized, cv2.COLOR_BGR2YUV_I420)
     height, width = target_size
-    y_plane = yuv420[:height * width]
-    u_plane = yuv420[height * width : height * width * 5 // 4]
-    v_plane = yuv420[height * width * 5 // 4 :]
+
+    y_plane = yuv420[:height, :].reshape(-1)
+    u_plane = yuv420[height:height + height//4, :].reshape(-1)
+    v_plane = yuv420[height + height//4:, :].reshape(-1)
+
     uv_interleaved = np.empty((height * width // 2,), dtype=np.uint8)
     uv_interleaved[0::2] = u_plane
     uv_interleaved[1::2] = v_plane
+
     packed_nv12 = np.concatenate([y_plane, uv_interleaved])
     return packed_nv12.astype(np.uint8)
 
