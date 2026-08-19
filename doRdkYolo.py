@@ -1,43 +1,126 @@
 import cv2
 import numpy as np
-from ultralytics_yolo_det import UltralyticsYOLODetect, UltralyticsYOLODetectConfig
+import hbm_runtime
 
-config = UltralyticsYOLODetectConfig(
-    model_path="models/08182351_best.bin",
-    classes_num=4,
-    score_thres=0.3,
-    nms_thres=0.45,
-    reg=16,
-    resize_type=1,
-    strides=[8, 16, 32]
-)
+def bgr_to_nv12(frame, target_size):
+    resized = cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
+    yuv420 = cv2.cvtColor(resized, cv2.COLOR_BGR2YUV_I420)
+    height, width = target_size
+    y_plane = yuv420[:height * width]
+    u_plane = yuv420[height * width : height * width * 5 // 4]
+    v_plane = yuv420[height * width * 5 // 4 :]
+    uv_interleaved = np.empty((height * width // 2,), dtype=np.uint8)
+    uv_interleaved[0::2] = u_plane
+    uv_interleaved[1::2] = v_plane
+    packed_nv12 = np.concatenate([y_plane, uv_interleaved])
+    return packed_nv12.astype(np.uint8)
 
-detector = UltralyticsYOLODetect(config)
-detector.set_scheduling_params(priority=0, bpu_cores=[0])
+def nms_boxes(boxes, scores, iou_threshold):
+    if len(boxes) == 0:
+        return []
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        w = np.maximum(0.0, xx2 - xx1 + 1)
+        h = np.maximum(0.0, yy2 - yy1 + 1)
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+        inds = np.where(ovr <= iou_threshold)[0]
+        order = order[inds + 1]
+    return keep
 
-with open("classes.txt", "r") as f:
-    class_names = [line.strip() for line in f.readlines()]
+def parse_yolo_output(outputs, ori_w, ori_h, conf_threshold=0.3, nms_threshold=0.45):
+    if isinstance(outputs, dict):
+        model_name = list(outputs.keys())[0]
+        pred = outputs[model_name]['output0']
+    else:
+        pred = outputs[0]
 
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-cap.set(cv2.CAP_PROP_FPS, 30)
+    pred = np.transpose(pred.squeeze(0).squeeze(0), (1, 0))
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
-    boxes, scores ,cls_ids = detector.predict(frame)
+    cx = pred[:, 0]
+    cy = pred[:, 1]
+    w = pred[:, 2]
+    h = pred[:, 3]
+    cls_logits = pred[:, 4:]
+    
+    cls_scores = 1.0 / (1.0 + np.exp(-cls_logits))
+    max_scores = np.max(cls_scores, axis=1)
+    cls_ids = np.argmax(cls_scores, axis=1)
 
-    for box, score, cls_id in zip(boxes, scores, cls_ids):
-        x1, y1, x2, y2 = map(int, box)
-        label = f"{class_names[cls_id]}: {score:.2f}"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+    valid = max_scores > conf_threshold
+    if not np.any(valid):
+        return np.empty((0, 4)), np.empty(0), np.empty(0)
+    
+    cx = cx[valid] * ori_w
+    cy = cy[valid] * ori_h
+    w = w[valid] * ori_w
+    h = h[valid] * ori_h
+    scores = max_scores[valid]
+    cls_ids = cls_ids[valid]
 
-    cv2.imshow("Detection", frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+    x1 = cx - w/2
+    y1 = cy - h/2
+    x2 = cx + w/2
+    y2 = cy + h/2
+    boxes = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
+
+    keep = nms_boxes(boxes, scores, nms_threshold)
+    return boxes[keep], scores[keep], cls_ids[keep]
+
+if __name__ == "__main__":
+    
+    runtime = hbm_runtime.HB_HBMRuntime("models/08182351_best.bin")
+    model_name = runtime.model_names[0]
+    input_name = runtime.input_names[model_name][0]
+    
+    with open("classes.txt", "r") as f:
+        class_names = [line.strip() for line in f.readlines()]
+
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+    
+    input_h, input_w = 736,736
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        ori_h, ori_w = frame.shape[:2]
+        nv12_data = bgr_to_nv12(frame, (input_w, input_h))
+        
+        inputs = {model_name: {input_name: nv12_data}}
+        outputs = runtime.run(inputs)
+        
+        boxes, scores, cls_ids = parse_yolo_output(
+            outputs, ori_w, ori_h,
+            conf_threshold=0.3,
+            nms_threshold=0.45
+        )
+
+        for box, score, cls_id in zip(boxes, scores, cls_ids):
+            x1, y1, x2, y2 = map(int, box)
+            label = f"{class_names[cls_id]}: {score:.2f}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+
+        cv2.imshow("Detection", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
 cap.release()
 cv2.destroyAllWindows()
