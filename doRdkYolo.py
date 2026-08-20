@@ -1,4 +1,5 @@
 import cv2
+import yaml
 import numpy as np
 from ultralytics_yolo_det import UltralyticsYOLODetect, UltralyticsYOLODetectConfig
 
@@ -15,8 +16,10 @@ config = UltralyticsYOLODetectConfig(
 detector = UltralyticsYOLODetect(config)
 detector.set_scheduling_params(priority=0, bpu_cores=[0])
 
-with open("classes.txt", "r") as f:
-    class_names = [line.strip() for line in f.readlines()]
+with open("data.yaml", "r") as f:
+    data_cfg = yaml.safe_load(f)
+    names = data_cfg['names']
+    class_names = names
 
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
