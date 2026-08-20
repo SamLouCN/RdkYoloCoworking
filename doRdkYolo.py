@@ -4,7 +4,7 @@ import numpy as np
 from ultralytics_yolo_det import UltralyticsYOLODetect, UltralyticsYOLODetectConfig
 
 config = UltralyticsYOLODetectConfig(
-    model_path="models/08182351_best.bin",
+    model_path="models/08201055_best.bin",
     classes_num=4,
     score_thres=0.3,
     nms_thres=0.45,
