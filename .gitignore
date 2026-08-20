@@ -2,3 +2,6 @@ dataset/
 runs/
 yolo26n.pt
 yolov8n.pt
+models/.venv
+docker
+samples
